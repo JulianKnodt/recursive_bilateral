@@ -47,7 +47,7 @@ pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
         &[v] => v,
         // average below
         &[_, _] => panic!(),
-        &[r,g,b] => (r >> 2) + (g >> 1) + (b >> 2),
+        &[r, g, b] => (r >> 2) + (g >> 1) + (b >> 2),
         //&[r, g, b] => ((r + b) >> 2) + (g >> 1),
         &[_r, _g, _b, _a] => todo!(),
         x => panic!(),
@@ -192,7 +192,7 @@ pub fn bilateral_filter<const C: usize>(
             u_p_color[i] = sch[i];
         }
 
-        for y in (0..h-1).rev() {
+        for y in (0..h - 1).rev() {
             for x in 0..w {
                 let c = x + y * w;
                 let p = c + w;
