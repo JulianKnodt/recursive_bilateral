@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 pub mod bilateral_filter2;
-pub use bilateral_filter2::bilateral_filter;
+pub use bilateral_filter2::{Buffer, bilateral_filter};
 
 type F = f32;
 

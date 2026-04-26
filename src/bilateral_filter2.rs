@@ -42,13 +42,14 @@ impl Buffer {
 pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
     let comp_diff: [u8; C] = std::array::from_fn(|i| a[i].abs_diff(b[i]));
 
-    match C {
-        0 => panic!(),
-        1 => comp_diff[0],
+    match comp_diff.as_slice() {
+        &[] => panic!(),
+        &[v] => v,
         // average below
-        2 => panic!(),
-        3 => todo!(),
-        4 => todo!(),
+        &[_, _] => panic!(),
+        &[r,g,b] => (r >> 2) + (g >> 1) + (b >> 2),
+        //&[r, g, b] => ((r + b) >> 2) + (g >> 1),
+        &[_r, _g, _b, _a] => todo!(),
         x => panic!(),
     }
 }
@@ -68,7 +69,7 @@ pub fn bilateral_filter<const C: usize>(
 
     let inv_sigma_range = 1.0 / (sigma_range * 255.);
     let mut range_table_f = std::array::from_fn::<F, { u8::MAX as usize + 1 }, _>(|i| {
-        alpha_f * (-(i as F) * inv_sigma_range)
+        alpha_f * (-(i as F) * inv_sigma_range).exp()
     });
 
     buf.resize::<C>(w, h);
@@ -114,11 +115,12 @@ pub fn bilateral_filter<const C: usize>(
         assert_eq!(src_color.len(), w * h);
 
         for y in 0..h {
-            let i = w * y + w - 1;
-            rp_f[i] = 1.;
-            r_p_color[i] = src_color[i].map(|v| v as F);
-            for x in 1..w {
-                let c = i - x;
+            let i = w * y;
+            let last_i = i + w - 1;
+            rp_f[last_i] = 1.;
+            r_p_color[last_i] = src_color[last_i].map(|v| v as F);
+            for x in (0..w - 1).rev() {
+                let c = i + x;
                 let p = c + 1;
                 let diff = diff_factor(src_color[c], src_color[p]);
 
@@ -173,7 +175,7 @@ pub fn bilateral_filter<const C: usize>(
                 let alpha_f = range_table_f[diff as usize];
                 dp_f[c] = inv_alpha_f + alpha_f * dp_f[p];
                 d_p_color[c] = std::array::from_fn(|i| {
-                    inv_alpha_f * sch[c][i] as F + alpha_f * d_p_color[p][i] as F
+                    inv_alpha_f * sch[c][i] as F + alpha_f * d_p_color[p][i]
                 });
             }
         }
@@ -186,21 +188,20 @@ pub fn bilateral_filter<const C: usize>(
 
         for x in 0..w {
             let i = w * (h - 1) + x;
-            dp_f[i] = 1.;
-            u_p_color[i] = sch[x];
+            up_f[i] = 1.;
+            u_p_color[i] = sch[i];
         }
 
-        for y in 1..h {
-            let y = h - 1 - y;
+        for y in (0..h-1).rev() {
             for x in 0..w {
                 let c = x + y * w;
-                let p = x + (y + 1) * w;
+                let p = c + w;
                 let diff = diff_factor(src_color[c], src_color[p]);
 
                 let alpha_f = range_table_f[diff as usize];
                 up_f[c] = inv_alpha_f + alpha_f * up_f[p];
                 u_p_color[c] = std::array::from_fn(|i| {
-                    inv_alpha_f * sch[c][i] as F + alpha_f * u_p_color[p][i] as F
+                    inv_alpha_f * sch[c][i] as F + alpha_f * u_p_color[p][i]
                 });
             }
         }
@@ -223,7 +224,8 @@ pub fn bilateral_filter<const C: usize>(
 
             for c in 0..C {
                 let avg = uc[i][c] + dc[i][c];
-                dst[i][c] = (fac * avg) as u8;
+                //assert!((fac * avg) < 255., "{}", fac * avg);
+                dst[i][c] = (fac * avg).clamp(0., 255.) as u8;
             }
         }
     }
