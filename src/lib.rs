@@ -13,6 +13,7 @@ impl Buffer {
         self.buf.resize((w * h * C + w * h) * 4, 1.);
     }
     fn components<const C: usize>(&mut self, w: usize, h: usize) -> ([&mut [F]; 4], [&mut [F]; 4]) {
+        assert_eq!(self.buf.len(), (w * h * C + w * h) * 4);
         let (left_pass_color, buf) = self.buf.split_at_mut(w * h * C);
         let (right_pass_color, buf) = buf.split_at_mut(w * h * C);
         let (down_pass_color, buf) = buf.split_at_mut(w * h * C);
@@ -40,6 +41,19 @@ impl Buffer {
 }
 
 pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
+    // TODO check which of these optimizes better?
+    /*
+    match C {
+      1 => return a[0].abs_diff(b[0]),
+      3 => {
+        let r = a[0].abs_diff(b[0]) >> 2;
+        let g = a[1].abs_diff(b[1]) >> 1;
+        let b = a[2].abs_diff(b[2]) >> 2;
+        r + g + b
+      }
+      _ => todo!(),
+    }
+    */
     let comp_diff: [u8; C] = std::array::from_fn(|i| a[i].abs_diff(b[i]));
 
     match comp_diff.as_slice() {
@@ -78,14 +92,13 @@ pub fn bilateral_filter<const C: usize>(
     buf.resize::<C>(w, h);
     let ([lp_c, rp_c, dp_c, up_c], [lp_f, rp_f, dp_f, up_f]) = buf.components::<C>(w, h);
     for y in 0..h {
-      unsafe { *lp_f.get_unchecked_mut(y * w) = 1. };
-      unsafe { *rp_f.get_unchecked_mut((y+1) * w - 1) = 1. };
+        unsafe { *lp_f.get_unchecked_mut(y * w) = 1. };
+        unsafe { *rp_f.get_unchecked_mut((y + 1) * w - 1) = 1. };
     }
 
     let (src_color, rem) = img_src.as_chunks::<C>();
     assert_eq!(rem, &[]);
     assert_eq!(src_color.len(), w * h);
-
 
     // left pass
     {
@@ -98,9 +111,9 @@ pub fn bilateral_filter<const C: usize>(
         for y in 0..h {
             let idx = y * w;
 
-            for c in 0..C {
+            for c in idx * C..(idx + 1) * C {
                 unsafe {
-                    *lp_c.get_unchecked_mut(idx * C + c) = *lp_c.get_unchecked(idx * C + c) as F;
+                    *lp_c.get_unchecked_mut(c) = *lp_c.get_unchecked(c) as F;
                 }
             }
 
@@ -110,13 +123,6 @@ pub fn bilateral_filter<const C: usize>(
                 let curr = idx + x;
                 let prev = curr - 1;
 
-                /*
-                let diff = unsafe {
-                    let sc: [_; C] = std::array::from_fn(|c| *img_src.get_unchecked(curr * C + c));
-                    let sp: [_; C] = std::array::from_fn(|c| *img_src.get_unchecked(prev * C + c));
-                    diff_factor(sc, sp)
-                };
-                */
                 let diff = unsafe {
                     diff_factor(
                         *src_color.get_unchecked(curr),
@@ -154,11 +160,9 @@ pub fn bilateral_filter<const C: usize>(
             let last_i = i + w - 1;
             debug_assert_eq!(rp_f[last_i], 1.);
             //rp_f[last_i] = 1.;
-            unsafe {
-                for c in 0..C {
-                    //.map(|v| v as F);
-                    *rp_c.get_unchecked_mut(last_i * C + c) =
-                        *img_src.get_unchecked(last_i * C + c) as F;
+            for ci in last_i * C..(last_i + 1) * C {
+                unsafe {
+                    *rp_c.get_unchecked_mut(ci) = *img_src.get_unchecked(ci) as F;
                 }
             }
             for x in (0..w - 1).rev() {
@@ -168,7 +172,6 @@ pub fn bilateral_filter<const C: usize>(
 
                 let alpha_f = unsafe { range_table_f.get_unchecked(diff as usize) };
                 unsafe {
-                    //rp_f[c] = inv_alpha_f + alpha_f * rp_f[p];
                     *rp_f.get_unchecked_mut(curr) =
                         inv_alpha_f + alpha_f * *rp_f.get_unchecked(prev);
                 }
@@ -177,12 +180,6 @@ pub fn bilateral_filter<const C: usize>(
                     rp_c[curr * C + c] =
                         inv_alpha_f * img_src[curr * C + c] as F + alpha_f * rp_c[prev * C + c];
                 }
-
-                /*
-                r_p_color[curr] = std::array::from_fn(|i| {
-                    inv_alpha_f * src_color[curr][i] as F + alpha_f * r_p_color[prev][i]
-                });
-                */
             }
         }
     }
@@ -190,32 +187,17 @@ pub fn bilateral_filter<const C: usize>(
     // vertical pass will be applied on top on horizontal pass, while using pixel differences from original image
     // result color stored in 'm_left_pass_color' and vertical pass will use it as source color
     {
-        /*
-        let (lc, rem) = lp_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        let (rc, rem) = rp_c.as_chunks::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(lc.len(), w * h);
-        assert_eq!(rc.len(), w * h);
-        */
-
         for i in 0..w * h {
             // average color divided by average factor
-            let fac = (lp_f[i] + rp_f[i]).recip();
 
-            for c in 0..C {
-                /*
-                let avg = lc[i][c] + rc[i][c];
-                *unsafe { lc[i].get_unchecked_mut(c) } = fac * avg;
-                */
-                let avg = lp_c[i * C + c] + rp_c[i * C + c];
-                lp_c[i * C + c] = fac * avg;
+            // TODO there's not much perf diff switching to div vs recip?
+            //let fac = (lp_f[i] + rp_f[i]).recip();
+            let fac = lp_f[i] + rp_f[i];
+
+            for ci in i * C..(i + 1) * C {
+                lp_c[ci] = (lp_c[ci] + rp_c[ci]) / fac;
             }
         }
-    }
-
-    if true {
-      return;
     }
 
     // down pass
@@ -225,8 +207,8 @@ pub fn bilateral_filter<const C: usize>(
         let (d_p_color, rem) = dp_c.as_chunks_mut::<C>();
         assert_eq!(rem, &[]);
 
+        dp_f[0..w].fill(1.);
         for x in 0..w {
-            dp_f[x] = 1.;
             d_p_color[x] = sch[x];
         }
 
@@ -271,26 +253,39 @@ pub fn bilateral_filter<const C: usize>(
         }
     }
 
+    /*
+     */
     let (dst, rem) = img_dst.as_chunks_mut::<C>();
     assert_eq!(rem, &[]);
     assert_eq!(dst.len(), w * h);
-    {
-        let (uc, rem) = up_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(uc.len(), w * h);
-        let (dc, rem) = dp_c.as_chunks::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(dc.len(), w * h);
+    let (uc, rem) = up_c.as_chunks_mut::<C>();
+    assert_eq!(rem, &[]);
+    assert_eq!(uc.len(), w * h);
+    let (dc, rem) = dp_c.as_chunks::<C>();
+    assert_eq!(rem, &[]);
+    assert_eq!(dc.len(), w * h);
 
-        for i in 0..w * h {
-            // average color divided by average factor
-            let fac = (up_f[i] + dp_f[i]).recip();
+    for i in 0..w * h {
+        // average color divided by average factor
+        let fac = (up_f[i] + dp_f[i]).recip();
 
-            for c in 0..C {
-                let avg = uc[i][c] + dc[i][c];
-                //assert!((fac * avg) < 255., "{}", fac * avg);
-                dst[i][c] = (fac * avg).clamp(0., 255.) as u8;
+        for c in 0..C {
+            dst[i][c] = ((uc[i][c] + dc[i][c]) * fac).clamp(0., 255.) as u8;
+        }
+    }
+    /*
+    for i in 0..w * h {
+        // average color divided by average factor
+        let fac = unsafe { *up_f.get_unchecked(i) + *dp_f.get_unchecked(i) };
+        let fac = fac.recip();
+
+        for ci in i * C..(i + 1) * C {
+            unsafe {
+                *img_dst.get_unchecked_mut(ci) =
+                    ((*up_c.get_unchecked(ci) + *dp_c.get_unchecked(ci)) * fac).clamp(0., 255.)
+                        as u8;
             }
         }
     }
+    */
 }
