@@ -88,23 +88,20 @@ pub fn bilateral_filter<const C: usize>(
 
     // left pass
     {
-        /*
-        let (l_p_color, rem) = lp_c.as_chunks_mut::<C>();
+        let (lpc, rem) = lp_c.as_chunks_mut::<C>();
         assert_eq!(rem, &[]);
-        assert_eq!(l_p_color.len(), w * h);
-        */
+        assert_eq!(lpc.len(), w * h);
+        /*
+         */
 
         for y in 0..h {
             let idx = y * w;
 
-            /*
-            // TODO what was this?
-            for c in idx * C..(idx + 1) * C {
-                unsafe {
-                    *lp_c.get_unchecked_mut(c) = *lp_c.get_unchecked(c) as F;
-                }
+            let lpc_i = unsafe { lpc.get_unchecked_mut(idx) };
+            let src_color_i = unsafe { src_color.get_unchecked(idx) };
+            for c in 0..C {
+                lpc_i[c] = src_color_i[c] as F;
             }
-            */
 
             debug_assert_eq!(lp_f[idx], 1.);
 
@@ -113,12 +110,9 @@ pub fn bilateral_filter<const C: usize>(
                 //let curr = idx + x;
                 let prev = curr - 1;
 
-                let diff = unsafe {
-                    diff_factor(
-                        *src_color.get_unchecked(curr),
-                        *src_color.get_unchecked(prev),
-                    )
-                };
+                let src_curr = unsafe { *src_color.get_unchecked(curr) };
+                let src_prev = unsafe { *src_color.get_unchecked(prev) };
+                let diff = diff_factor(src_curr, src_prev);
                 let alpha_f = unsafe { *range_table_f.get_unchecked(diff as usize) };
 
                 // TODO pre-add inv_alpha_f to all factors?
@@ -127,14 +121,9 @@ pub fn bilateral_filter<const C: usize>(
                         inv_alpha_f + alpha_f * *lp_f.get_unchecked(prev);
                 }
 
+                let [lpc_curr, lpc_prev] = unsafe { lpc.get_disjoint_unchecked_mut([curr, prev]) };
                 for c in 0..C {
-                    unsafe {
-                        *lp_c.get_unchecked_mut(curr * C + c) = inv_alpha_f
-                            * *img_src.get_unchecked(curr * C + c) as F
-                            + alpha_f * *lp_c.get_unchecked(prev * C + c);
-                    }
-                    /*
-                     */
+                    lpc_curr[c] = inv_alpha_f * src_curr[c] as F + alpha_f * lpc_prev[c];
                 }
             }
         }
@@ -159,7 +148,9 @@ pub fn bilateral_filter<const C: usize>(
             for x in (0..w - 1).rev() {
                 let curr = i + x;
                 let prev = curr + 1;
-                let diff = diff_factor(src_color[curr], src_color[prev]);
+                let src_curr = unsafe { *src_color.get_unchecked(curr) };
+                let src_prev = unsafe { *src_color.get_unchecked(prev) };
+                let diff = diff_factor(src_curr, src_prev);
 
                 let alpha_f = unsafe { range_table_f.get_unchecked(diff as usize) };
                 unsafe {
@@ -168,7 +159,6 @@ pub fn bilateral_filter<const C: usize>(
                 }
 
                 let [rpc_curr, rpc_prev] = unsafe { rpc.get_disjoint_unchecked_mut([curr, prev]) };
-                let src_curr = unsafe { src_color.get_unchecked(curr) };
                 for c in 0..C {
                     rpc_curr[c] = inv_alpha_f * src_curr[c] as F + alpha_f * rpc_prev[c];
                 }
