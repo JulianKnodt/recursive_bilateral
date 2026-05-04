@@ -9,7 +9,7 @@ impl Buffer {
     pub fn new() -> Self {
         Self { buf: vec![] }
     }
-    fn resize<const C: usize>(&mut self, w: usize, h: usize) {
+    pub fn resize<const C: usize>(&mut self, w: usize, h: usize) {
         self.buf.resize((w * h * C + w * h) * 4, 1.);
     }
     fn components<const C: usize>(&mut self, w: usize, h: usize) -> ([&mut [F]; 4], [&mut [F]; 4]) {
@@ -93,17 +93,17 @@ pub fn bilateral_filter<const C: usize>(
         assert_eq!(lpc.len(), w * h);
 
         for y in 0..h {
-            let idx = y * w;
+            let i = y * w;
 
-            let lpc_i = unsafe { lpc.get_unchecked_mut(idx) };
-            let src_color_i = unsafe { src_color.get_unchecked(idx) };
+            let lpc_i = unsafe { lpc.get_unchecked_mut(i) };
+            let src_color_i = unsafe { src_color.get_unchecked(i) };
             for c in 0..C {
                 lpc_i[c] = src_color_i[c] as F;
             }
 
-            debug_assert_eq!(lp_f[idx], 1.);
+            debug_assert_eq!(lp_f[i], 1.);
 
-            for curr in idx + 1..idx + w {
+            for curr in i + 1..i + w {
                 let prev = curr - 1;
 
                 let src_curr = unsafe { *src_color.get_unchecked(curr) };
@@ -141,6 +141,7 @@ pub fn bilateral_filter<const C: usize>(
             for c in 0..C {
                 rpc_last_i[c] = src_color_last_i[c] as F;
             }
+
             for x in (0..w - 1).rev() {
                 let curr = i + x;
                 let prev = curr + 1;
@@ -238,14 +239,13 @@ pub fn bilateral_filter<const C: usize>(
         assert_eq!(rem, &[]);
         assert_eq!(upc.len(), w * h);
 
+        up_f[w*(h-1)..w*h].fill(1.);
         /*
         let r = w*(h-1)..w*h;
-        up_f[r.clone()].fill(1.);
         upc[r.clone()].copy_from_slice(&sch[r]);
         */
         for x in 0..w {
             let i = w * (h - 1) + x;
-            up_f[i] = 1.;
             upc[i] = sch[i];
         }
 

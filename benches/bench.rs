@@ -17,6 +17,7 @@ fn bench_rb(b: &mut test::Bencher) {
     let img = img.into_rgb8();
     let mut out = img.clone();
     let mut buf = Buffer::default();
+    buf.resize::<3>(w, h);
 
     b.iter(|| bilateral_filter::<3>(&img, &mut out, w, h, 0.12, 0.09, &mut buf));
 }
