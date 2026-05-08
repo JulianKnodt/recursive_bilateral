@@ -1,7 +1,13 @@
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 pub type F = f32;
 
 mod bilateral;
 pub use bilateral::*;
+
+mod bilateral2;
+pub use bilateral2::bilateral_filter as bilateral_filter2;
 
 mod guided_upsample;
 pub use guided_upsample::*;
@@ -45,6 +51,17 @@ impl Buffer {
             up_pass_factor,
         ];
         (colors, factors)
+    }
+
+    fn components_concat<const C: usize>(&mut self, w: usize, h: usize) -> [&mut [F]; 4] {
+        assert_eq!(self.buf.len(), (w * h * C + w * h) * 4);
+        let (lpcf, buf) = self.buf.split_at_mut(w * h * (C + 1));
+        let (rpcf, buf) = buf.split_at_mut(w * h * (C + 1));
+        let (dpcf, buf) = buf.split_at_mut(w * h * (C + 1));
+        let (upcf, buf) = buf.split_at_mut(w * h * (C + 1));
+
+        assert_eq!(buf, &[]);
+        [lpcf, rpcf, dpcf, upcf]
     }
 }
 
