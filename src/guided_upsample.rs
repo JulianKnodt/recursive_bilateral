@@ -37,6 +37,14 @@ pub fn guided_2x<const C: usize>(
     let src_w = w / 2;
     let src_h = h / 2;
 
+    // TODO turning these asserts on improves speed?
+    /*
+    assert_eq!(src_w % 2, 0);
+    assert_eq!(src_h % 2, 0);
+    assert_eq!(w % 4, 0);
+    assert_eq!(h % 4, 0);
+    */
+
     buf.resize::<C>(w, h);
     let ([lp_c, rp_c, dp_c, up_c], [lp_f, rp_f, dp_f, up_f]) = buf.components::<C>(w, h);
     // XXX do separate loops optimize better?
@@ -46,23 +54,26 @@ pub fn guided_2x<const C: usize>(
     }
 
     let (src_color, rem) = img_src.as_chunks::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(src_color.len(), src_w * src_h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(src_color.len(), src_w * src_h);
 
     let (guide_color, rem) = guide_img.as_chunks::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(guide_color.len(), w * h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(guide_color.len(), w * h);
 
     // left pass
     {
         let (lpc, rem) = lp_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(lpc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(lpc.len(), w * h);
 
-        for y in 0..h {
+        // parallelizable at this level?
+        //let lp_f_rows = lp_f.chunks_exact_mut(w);
+
+        for (y, row) in lpc.chunks_exact_mut(w).enumerate() {
             let i = y * w;
 
-            let lpc_i = unsafe { lpc.get_unchecked_mut(i) };
+            let lpc_i = unsafe { row.get_unchecked_mut(0) };
             let src_color_i = sample_nn_half(src_color, src_w, src_h, 0, y);
             for c in 0..C {
                 lpc_i[c] = src_color_i[c] as F;
@@ -82,10 +93,11 @@ pub fn guided_2x<const C: usize>(
                 // TODO pre-add inv_alpha_f to all factors?
                 unsafe {
                     *lp_f.get_unchecked_mut(curr) =
-                        inv_alpha_f + alpha_f * *lp_f.get_unchecked(prev);
+                        alpha_f.mul_add(*lp_f.get_unchecked(prev), inv_alpha_f);
+                    //inv_alpha_f + alpha_f * *lp_f.get_unchecked(prev);
                 }
 
-                let [lpc_curr, lpc_prev] = unsafe { lpc.get_disjoint_unchecked_mut([curr, prev]) };
+                let [lpc_curr, lpc_prev] = unsafe { row.get_disjoint_unchecked_mut([x, x - 1]) };
                 let src_curr = sample_nn_half(src_color, src_w, src_h, x, y);
                 for c in 0..C {
                     lpc_curr[c] = inv_alpha_f * src_curr[c] as F + alpha_f * lpc_prev[c];
@@ -94,11 +106,17 @@ pub fn guided_2x<const C: usize>(
         }
     }
 
+    /*
+    if true {
+      return;
+    }
+    */
+
     // right pass
     {
         let (rpc, rem) = rp_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(rpc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(rpc.len(), w * h);
 
         for y in 0..h {
             let i = w * y;
@@ -138,11 +156,11 @@ pub fn guided_2x<const C: usize>(
     // result color stored in 'm_left_pass_color' and vertical pass will use it as source color
     {
         let (lc, rem) = lp_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(lc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(lc.len(), w * h);
         let (rc, rem) = rp_c.as_chunks::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(rc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(rc.len(), w * h);
 
         for i in 0..w * h {
             // average color divided by average factor
@@ -161,12 +179,12 @@ pub fn guided_2x<const C: usize>(
 
     // down pass
     let (sch, rem) = lp_c.as_chunks::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(sch.len(), w * h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(sch.len(), w * h);
     {
         let (dpc, rem) = dp_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(dpc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(dpc.len(), w * h);
 
         dp_f[0..w].fill(1.);
         /*
@@ -177,7 +195,9 @@ pub fn guided_2x<const C: usize>(
         }
         */
         for x in 0..w {
-            dpc[x] = sch[x];
+            unsafe {
+                *dpc.get_unchecked_mut(x) = *sch.get_unchecked(x);
+            }
         }
 
         /* NOTE technically could be 1..h but for reduced computation later */
@@ -207,17 +227,21 @@ pub fn guided_2x<const C: usize>(
     // up pass
     {
         let (upc, rem) = up_c.as_chunks_mut::<C>();
-        assert_eq!(rem, &[]);
-        assert_eq!(upc.len(), w * h);
+        debug_assert_eq!(rem, &[]);
+        debug_assert_eq!(upc.len(), w * h);
 
-        up_f[w * (h - 1)..w * h].fill(1.);
+        unsafe {
+            up_f.get_unchecked_mut(w * (h - 1)..w * h).fill(1.);
+        }
         /*
         let r = w*(h-1)..w*h;
         upc[r.clone()].copy_from_slice(&sch[r]);
         */
         for x in 0..w {
             let i = w * (h - 1) + x;
-            upc[i] = sch[i];
+            unsafe {
+                *upc.get_unchecked_mut(i) = *sch.get_unchecked(i);
+            }
         }
 
         for y in (0..h - 1).rev() {
@@ -247,14 +271,14 @@ pub fn guided_2x<const C: usize>(
     /*
      */
     let (dst, rem) = img_dst.as_chunks_mut::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(dst.len(), w * h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(dst.len(), w * h);
     let (uc, rem) = up_c.as_chunks::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(uc.len(), w * h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(uc.len(), w * h);
     let (dc, rem) = dp_c.as_chunks::<C>();
-    assert_eq!(rem, &[]);
-    assert_eq!(dc.len(), w * h);
+    debug_assert_eq!(rem, &[]);
+    debug_assert_eq!(dc.len(), w * h);
 
     for i in 0..w * h {
         // average color divided by average factor

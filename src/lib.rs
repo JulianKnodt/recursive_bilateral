@@ -18,6 +18,8 @@ impl Buffer {
     pub fn resize<const C: usize>(&mut self, w: usize, h: usize) {
         self.buf.resize((w * h * C + w * h) * 4, 1.);
     }
+    // TODO change these components to instead be C+1 for each color+factor,
+    // so they can be stored together
     fn components<const C: usize>(&mut self, w: usize, h: usize) -> ([&mut [F]; 4], [&mut [F]; 4]) {
         assert_eq!(self.buf.len(), (w * h * C + w * h) * 4);
         let (left_pass_color, buf) = self.buf.split_at_mut(w * h * C);
@@ -55,10 +57,11 @@ pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
             let b = a[2].abs_diff(b[2]) >> 2;
             r + g + b
         }
-        _ => todo!(),
+        c => todo!("Not implemented for {c} channels"),
     }
 }
 
+#[inline]
 pub(crate) fn sample_nn_half<const C: usize>(
     data: &[[u8; C]],
     w: usize,
@@ -70,7 +73,7 @@ pub(crate) fn sample_nn_half<const C: usize>(
     debug_assert!(og_x < w * 2, "{og_x} {w}");
     debug_assert!(og_y < h * 2, "{og_y} {h}");
     debug_assert_eq!(data.len(), w * h);
-    let i = (og_x / 2) + (og_y / 2) * w;
+    let i = (og_x >> 1) + (og_y >> 1) * w;
 
     unsafe { *data.get_unchecked(i) }
 }
