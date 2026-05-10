@@ -1,3 +1,4 @@
+#![feature(float_algebraic)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
@@ -5,9 +6,6 @@ pub type F = f32;
 
 mod bilateral;
 pub use bilateral::*;
-
-mod bilateral2;
-pub use bilateral2::bilateral_filter as bilateral_filter2;
 
 mod guided_upsample;
 pub use guided_upsample::*;

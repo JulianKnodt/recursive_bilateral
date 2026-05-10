@@ -20,7 +20,7 @@ fn bench_rb(b: &mut test::Bencher) {
     let mut buf = Buffer::default();
     buf.resize::<3>(w, h);
 
-    b.iter(|| bilateral_filter::<3>(&img, &mut out, w, h, 0.12, 0.09, &mut buf));
+    b.iter(|| bilateral_filter::<3, 4>(&img, &mut out, w, h, 0.12, 0.09, &mut buf));
 }
 
 #[bench]
