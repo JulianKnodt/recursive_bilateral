@@ -22,34 +22,6 @@ impl Buffer {
     pub fn resize<const C: usize>(&mut self, w: usize, h: usize) {
         self.buf.resize((w * h * C + w * h) * 4, 1.);
     }
-    // TODO change these components to instead be C+1 for each color+factor,
-    // so they can be stored together
-    fn components<const C: usize>(&mut self, w: usize, h: usize) -> ([&mut [F]; 4], [&mut [F]; 4]) {
-        assert_eq!(self.buf.len(), (w * h * C + w * h) * 4);
-        let (left_pass_color, buf) = self.buf.split_at_mut(w * h * C);
-        let (right_pass_color, buf) = buf.split_at_mut(w * h * C);
-        let (down_pass_color, buf) = buf.split_at_mut(w * h * C);
-        let (up_pass_color, buf) = buf.split_at_mut(w * h * C);
-
-        let (left_pass_factor, buf) = buf.split_at_mut(w * h);
-        let (right_pass_factor, buf) = buf.split_at_mut(w * h);
-        let (down_pass_factor, buf) = buf.split_at_mut(w * h);
-        let (up_pass_factor, buf) = buf.split_at_mut(w * h);
-        assert_eq!(buf, &[]);
-        let colors = [
-            left_pass_color,
-            right_pass_color,
-            down_pass_color,
-            up_pass_color,
-        ];
-        let factors = [
-            left_pass_factor,
-            right_pass_factor,
-            down_pass_factor,
-            up_pass_factor,
-        ];
-        (colors, factors)
-    }
 
     fn components_concat<const C: usize>(&mut self, w: usize, h: usize) -> [&mut [F]; 4] {
         assert_eq!(self.buf.len(), (w * h * C + w * h) * 4);

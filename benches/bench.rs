@@ -2,7 +2,7 @@
 
 extern crate test;
 
-use recursive_bilateral::{Buffer, bilateral_filter, guided_2x, guided_2x_2};
+use recursive_bilateral::{Buffer, bilateral_filter, guided_2x};
 
 use image;
 
@@ -24,7 +24,7 @@ fn bench_rb(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn bench_guided_upsample_2(b: &mut test::Bencher) {
+fn bench_guided_upsample(b: &mut test::Bencher) {
     let img = image::load_from_memory(IMG).unwrap();
     let w = img.width() as usize;
     let h = img.height() as usize;
