@@ -1,27 +1,35 @@
 use super::{Buffer, F, diff_factor, sample_nn_half};
 
-pub fn guided_2x<const C: usize>(
-    // half resolution src to upsample
+pub fn guided_2x<const C: usize, const C_PLUS_1: usize>(
     img_src: &[u8],
+    img_dst: &mut [u8],
+    img_guide: &[u8],
+
     dst_w: usize,
     dst_h: usize,
-
-    // destination location
-    img_dst: &mut [u8],
-    // image to use as guide when upsampling
-    guide_img: &[u8],
 
     sigma_spatial: F,
     sigma_range: F,
 
     buf: &mut Buffer,
 ) {
+    assert_eq!(
+        C + 1,
+        C_PLUS_1,
+        "Temporary restriction due to const generics"
+    );
+
     assert_eq!(img_src.len(), dst_w * dst_h * C / 4);
     assert_eq!(dst_w % 2, 0);
     assert_eq!(dst_h % 2, 0);
+    let w = dst_w;
+    let h = dst_h;
 
-    assert_eq!(img_dst.len(), dst_w * dst_h * C);
-    assert_eq!(guide_img.len(), dst_w * dst_h * C);
+    assert_eq!(img_guide.len(), w * h * C);
+    assert_eq!(img_dst.len(), w * h * C);
+
+    let src_w = w / 2;
+    let src_h = h / 2;
 
     let alpha_f = (-std::f64::consts::SQRT_2 as F / (sigma_spatial * 255.) as F).exp();
     let inv_alpha_f = 1. - alpha_f;
@@ -31,55 +39,41 @@ pub fn guided_2x<const C: usize>(
         alpha_f * (-(i as F) * inv_sigma_range).exp()
     });
 
-    let w = dst_w;
-    let h = dst_h;
-
-    let src_w = w / 2;
-    let src_h = h / 2;
-
-    // TODO turning these asserts on improves speed?
-    /*
-    assert_eq!(src_w % 2, 0);
-    assert_eq!(src_h % 2, 0);
-    assert_eq!(w % 4, 0);
-    assert_eq!(h % 4, 0);
-    */
-
     buf.resize::<C>(w, h);
-    let ([lp_c, rp_c, dp_c, up_c], [lp_f, rp_f, dp_f, up_f]) = buf.components::<C>(w, h);
+    let comps = buf.components_concat::<C>(w, h);
+    let [lp, rp, dp, up] = comps.map(|c| {
+        let (cp, rem) = c.as_chunks_mut::<C_PLUS_1>();
+        assert_eq!(rem, &[]);
+        assert_eq!(cp.len(), w * h);
+        cp
+    });
+
     // XXX do separate loops optimize better?
     for y in 0..h {
-        unsafe { *lp_f.get_unchecked_mut(y * w) = 1. };
-        unsafe { *rp_f.get_unchecked_mut((y + 1) * w - 1) = 1. };
+        unsafe { lp.get_unchecked_mut(y * w)[C] = 1. };
+        unsafe { rp.get_unchecked_mut((y + 1) * w - 1)[C] = 1. };
     }
 
     let (src_color, rem) = img_src.as_chunks::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(src_color.len(), src_w * src_h);
+    assert_eq!(rem, &[]);
+    assert_eq!(src_color.len(), src_w * src_h);
 
-    let (guide_color, rem) = guide_img.as_chunks::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(guide_color.len(), w * h);
+    let (guide_color, rem) = img_guide.as_chunks::<C>();
+    assert_eq!(rem, &[]);
+    assert_eq!(guide_color.len(), w * h);
 
     // left pass
     {
-        let (lpc, rem) = lp_c.as_chunks_mut::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(lpc.len(), w * h);
-
-        // parallelizable at this level?
-        //let lp_f_rows = lp_f.chunks_exact_mut(w);
-
-        for (y, row) in lpc.chunks_exact_mut(w).enumerate() {
+        for y in 0..h {
             let i = y * w;
 
-            let lpc_i = unsafe { row.get_unchecked_mut(0) };
+            let lp_i = unsafe { lp.get_unchecked_mut(i) };
             let src_color_i = sample_nn_half(src_color, src_w, src_h, 0, y);
             for c in 0..C {
-                lpc_i[c] = src_color_i[c] as F;
+                lp_i[c] = src_color_i[c] as F;
             }
 
-            debug_assert_eq!(lp_f[i], 1.);
+            debug_assert_eq!(lp_i[C], 1.);
 
             for x in 1..w {
                 let curr = i + x;
@@ -90,45 +84,30 @@ pub fn guided_2x<const C: usize>(
                 let diff = diff_factor(guide_curr, guide_prev);
                 let alpha_f = unsafe { *range_table_f.get_unchecked(diff as usize) };
 
-                // TODO pre-add inv_alpha_f to all factors?
-                unsafe {
-                    *lp_f.get_unchecked_mut(curr) =
-                        alpha_f.mul_add(*lp_f.get_unchecked(prev), inv_alpha_f);
-                    //inv_alpha_f + alpha_f * *lp_f.get_unchecked(prev);
-                }
-
-                let [lpc_curr, lpc_prev] = unsafe { row.get_disjoint_unchecked_mut([x, x - 1]) };
+                let [lp_curr, lp_prev] = unsafe { lp.get_disjoint_unchecked_mut([curr, prev]) };
                 let src_curr = sample_nn_half(src_color, src_w, src_h, x, y);
                 for c in 0..C {
-                    lpc_curr[c] = inv_alpha_f * src_curr[c] as F + alpha_f * lpc_prev[c];
+                    lp_curr[c] = inv_alpha_f
+                        .algebraic_mul(src_curr[c] as F)
+                        .algebraic_add(alpha_f.algebraic_mul(lp_prev[c]));
                 }
+                lp_curr[C] = inv_alpha_f.algebraic_add(alpha_f.algebraic_mul(lp_prev[C]));
             }
         }
     }
 
-    /*
-    if true {
-      return;
-    }
-    */
-
     // right pass
     {
-        let (rpc, rem) = rp_c.as_chunks_mut::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(rpc.len(), w * h);
-
         for y in 0..h {
             let i = w * y;
             let last_i = i + w - 1;
-            debug_assert_eq!(rp_f[last_i], 1.);
             //rp_f[last_i] = 1.;
-            let rpc_last_i = unsafe { rpc.get_unchecked_mut(last_i) };
-            //let src_color_last_i = unsafe { src_color.get_unchecked(last_i) };
+            let rp_last_i = unsafe { rp.get_unchecked_mut(last_i) };
             let src_color_last_i = sample_nn_half(src_color, src_w, src_h, w - 1, y);
             for c in 0..C {
-                rpc_last_i[c] = src_color_last_i[c] as F;
+                rp_last_i[c] = src_color_last_i[c] as F;
             }
+            debug_assert_eq!(rp_last_i[C], 1.);
 
             for x in (0..w - 1).rev() {
                 let curr = i + x;
@@ -138,16 +117,15 @@ pub fn guided_2x<const C: usize>(
                 let diff = diff_factor(guide_curr, guide_prev);
 
                 let alpha_f = unsafe { range_table_f.get_unchecked(diff as usize) };
-                unsafe {
-                    *rp_f.get_unchecked_mut(curr) =
-                        inv_alpha_f + alpha_f * *rp_f.get_unchecked(prev);
-                }
 
-                let [rpc_curr, rpc_prev] = unsafe { rpc.get_disjoint_unchecked_mut([curr, prev]) };
+                let [rp_curr, rp_prev] = unsafe { rp.get_disjoint_unchecked_mut([curr, prev]) };
                 let src_curr = sample_nn_half(src_color, src_w, src_h, x, y);
                 for c in 0..C {
-                    rpc_curr[c] = inv_alpha_f * src_curr[c] as F + alpha_f * rpc_prev[c];
+                    rp_curr[c] = inv_alpha_f
+                        .algebraic_mul(src_curr[c] as F)
+                        .algebraic_add(alpha_f.algebraic_mul(rp_prev[c]));
                 }
+                rp_curr[C] = inv_alpha_f.algebraic_add(alpha_f.algebraic_mul(rp_prev[C]));
             }
         }
     }
@@ -155,38 +133,29 @@ pub fn guided_2x<const C: usize>(
     // vertical pass will be applied on top on horizontal pass, while using pixel differences from original image
     // result color stored in 'm_left_pass_color' and vertical pass will use it as source color
     {
-        let (lc, rem) = lp_c.as_chunks_mut::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(lc.len(), w * h);
-        let (rc, rem) = rp_c.as_chunks::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(rc.len(), w * h);
-
         for i in 0..w * h {
             // average color divided by average factor
+            let lp_i = unsafe { lp.get_unchecked_mut(i) };
+            let rp_i = unsafe { rp.get_unchecked(i) };
 
             // TODO there's not much perf diff switching to div vs recip?
-            let fac = unsafe { *lp_f.get_unchecked(i) + *rp_f.get_unchecked(i) };
-            let fac = fac.recip();
-
-            let lc_i = unsafe { lc.get_unchecked_mut(i) };
-            let rc_i = unsafe { rc.get_unchecked(i) };
+            let fac = (lp_i[C] + rp_i[C]).recip();
             for c in 0..C {
-                lc_i[c] = (lc_i[c] + rc_i[c]) * fac;
+                lp_i[c] = (lp_i[c] + rp_i[c]) * fac;
             }
+            /*
+            let fac = lp_i[C].algebraic_add(rp_i[C]);
+            for c in 0..C {
+                lp_i[c] = lp_i[c].algebraic_add(rp_i[c]).algebraic_div(fac);
+            }
+            */
         }
     }
 
     // down pass
-    let (sch, rem) = lp_c.as_chunks::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(sch.len(), w * h);
+    let sch = lp;
     {
-        let (dpc, rem) = dp_c.as_chunks_mut::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(dpc.len(), w * h);
-
-        dp_f[0..w].fill(1.);
+        //dp_f[0..w].fill(1.);
         /*
         unsafe {
             dpc
@@ -195,9 +164,12 @@ pub fn guided_2x<const C: usize>(
         }
         */
         for x in 0..w {
-            unsafe {
-                *dpc.get_unchecked_mut(x) = *sch.get_unchecked(x);
+            let dp_x = unsafe { dp.get_unchecked_mut(x) };
+            let sch_x = unsafe { sch.get_unchecked(x) };
+            for c in 0..C {
+                dp_x[c] = sch_x[c];
             }
+            dp_x[C] = 1.;
         }
 
         /* NOTE technically could be 1..h but for reduced computation later */
@@ -205,91 +177,88 @@ pub fn guided_2x<const C: usize>(
             for x in 0..w {
                 let prev = x + y * w;
                 let curr = prev + w;
-                let guide_curr = unsafe { *guide_color.get_unchecked(curr) };
-                let guide_prev = unsafe { *guide_color.get_unchecked(prev) };
-                let diff = diff_factor(guide_curr, guide_prev);
+                let guide_color_curr = unsafe { *guide_color.get_unchecked(curr) };
+                let guide_color_prev = unsafe { *guide_color.get_unchecked(prev) };
+                let diff = diff_factor(guide_color_curr, guide_color_prev);
 
                 let alpha_f = unsafe { *range_table_f.get_unchecked(diff as usize) };
-                unsafe {
-                    *dp_f.get_unchecked_mut(curr) =
-                        inv_alpha_f + alpha_f * *dp_f.get_unchecked(prev);
-                }
 
-                let [dpc_curr, dpc_prev] = unsafe { dpc.get_disjoint_unchecked_mut([curr, prev]) };
+                let [dp_curr, dp_prev] = unsafe { dp.get_disjoint_unchecked_mut([curr, prev]) };
                 let sch_curr = unsafe { sch.get_unchecked(curr) };
+                /*
                 for c in 0..C {
-                    dpc_curr[c] = inv_alpha_f * sch_curr[c] + alpha_f * dpc_prev[c];
+                    dp_curr[c] = inv_alpha_f * sch_curr[c] + alpha_f * dp_prev[c];
                 }
+                dp_curr[C] = inv_alpha_f + alpha_f * dp_prev[C];
+                */
+                for c in 0..C {
+                    dp_curr[c] = inv_alpha_f
+                        .algebraic_mul(sch_curr[c])
+                        .algebraic_add(alpha_f.algebraic_mul(dp_prev[c]));
+                }
+                dp_curr[C] = inv_alpha_f.algebraic_add(alpha_f.algebraic_mul(dp_prev[C]));
             }
         }
     }
 
     // up pass
     {
-        let (upc, rem) = up_c.as_chunks_mut::<C>();
-        debug_assert_eq!(rem, &[]);
-        debug_assert_eq!(upc.len(), w * h);
-
-        unsafe {
-            up_f.get_unchecked_mut(w * (h - 1)..w * h).fill(1.);
-        }
+        //up_f[w * (h - 1)..w * h].fill(1.);
         /*
         let r = w*(h-1)..w*h;
         upc[r.clone()].copy_from_slice(&sch[r]);
         */
         for x in 0..w {
             let i = w * (h - 1) + x;
-            unsafe {
-                *upc.get_unchecked_mut(i) = *sch.get_unchecked(i);
+            let up_i = unsafe { up.get_unchecked_mut(i) };
+            let sch_i = unsafe { sch.get_unchecked(i) };
+            for c in 0..C {
+                up_i[c] = sch_i[c];
             }
+            up_i[C] = 1.;
         }
 
         for y in (0..h - 1).rev() {
             for x in 0..w {
                 let curr = x + y * w;
                 let prev = curr + w;
-                let guide_curr = unsafe { *guide_color.get_unchecked(curr) };
-                let guide_prev = unsafe { *guide_color.get_unchecked(prev) };
-                let diff = diff_factor(guide_curr, guide_prev);
+                let guide_color_curr = unsafe { *guide_color.get_unchecked(curr) };
+                let guide_color_prev = unsafe { *guide_color.get_unchecked(prev) };
+                let diff = diff_factor(guide_color_curr, guide_color_prev);
 
                 let alpha_f = unsafe { range_table_f.get_unchecked(diff as usize) };
 
-                unsafe {
-                    *up_f.get_unchecked_mut(curr) =
-                        inv_alpha_f + alpha_f * up_f.get_unchecked(prev);
-                }
-
-                let [upc_curr, upc_prev] = unsafe { upc.get_disjoint_unchecked_mut([curr, prev]) };
+                let [up_curr, up_prev] = unsafe { up.get_disjoint_unchecked_mut([curr, prev]) };
                 let sch_curr = unsafe { sch.get_unchecked(curr) };
+                /*
                 for c in 0..C {
-                    upc_curr[c] = inv_alpha_f * sch_curr[c] + alpha_f * upc_prev[c];
+                    up_curr[c] = inv_alpha_f * sch_curr[c] + alpha_f * up_prev[c];
                 }
+                up_curr[C] = inv_alpha_f + alpha_f * up_prev[C];
+                */
+                for c in 0..C {
+                    up_curr[c] = inv_alpha_f
+                        .algebraic_mul(sch_curr[c])
+                        .algebraic_add(alpha_f.algebraic_mul(up_prev[c]));
+                }
+                up_curr[C] = inv_alpha_f.algebraic_add(alpha_f.algebraic_mul(up_prev[C]));
             }
         }
     }
 
-    /*
-     */
     let (dst, rem) = img_dst.as_chunks_mut::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(dst.len(), w * h);
-    let (uc, rem) = up_c.as_chunks::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(uc.len(), w * h);
-    let (dc, rem) = dp_c.as_chunks::<C>();
-    debug_assert_eq!(rem, &[]);
-    debug_assert_eq!(dc.len(), w * h);
+    assert_eq!(rem, &[]);
+    assert_eq!(dst.len(), w * h);
 
     for i in 0..w * h {
-        // average color divided by average factor
-        let fac = unsafe { *up_f.get_unchecked(i) + *dp_f.get_unchecked(i) };
-        let fac = fac.recip();
-
+        let up_i = unsafe { up.get_unchecked(i) };
+        let dp_i = unsafe { dp.get_unchecked(i) };
         let dst_i = unsafe { dst.get_unchecked_mut(i) };
-        let uc_i = unsafe { uc.get_unchecked(i) };
-        let dc_i = unsafe { dc.get_unchecked(i) };
+        // average color divided by average factor
+        let fac = (up_i[C] + dp_i[C]).recip();
+
         for c in 0..C {
-            dst_i[c] = ((uc_i[c] + dc_i[c]) * fac).clamp(0., 255.) as u8;
+            dst_i[c] = ((up_i[c] + dp_i[c]) * fac).clamp(0., 255.) as u8;
         }
     }
 }

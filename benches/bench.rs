@@ -2,7 +2,7 @@
 
 extern crate test;
 
-use recursive_bilateral::{Buffer, bilateral_filter, guided_2x};
+use recursive_bilateral::{Buffer, bilateral_filter, guided_2x, guided_2x_2};
 
 use image;
 
@@ -24,7 +24,7 @@ fn bench_rb(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn bench_guided_upsample(b: &mut test::Bencher) {
+fn bench_guided_upsample_2(b: &mut test::Bencher) {
     let img = image::load_from_memory(IMG).unwrap();
     let w = img.width() as usize;
     let h = img.height() as usize;
@@ -40,7 +40,7 @@ fn bench_guided_upsample(b: &mut test::Bencher) {
     let mut out = img.clone();
     out.fill(0);
     let mut buf = Buffer::new();
-    b.iter(|| guided_2x::<3>(&low_res, w, h, &mut out, &guide, 0.12, 0.09, &mut buf));
+    b.iter(|| guided_2x::<3, 4>(&low_res, &mut out, &guide, w, h, 0.12, 0.09, &mut buf));
 
     out.save("upsample_2x.png").expect("Failed to save");
 }
@@ -62,7 +62,7 @@ fn bench_guided_upsample_one_channel(b: &mut test::Bencher) {
     let mut out = img.clone();
     out.fill(0);
     let mut buf = Buffer::new();
-    b.iter(|| guided_2x::<1>(&low_res, w, h, &mut out, &guide, 0.12, 0.09, &mut buf));
+    b.iter(|| guided_2x::<1, 2>(&low_res, &mut out, &guide, w, h, 0.12, 0.09, &mut buf));
 
     out.save("upsample_2x_1c.png").expect("Failed to save");
 }
