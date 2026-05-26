@@ -7,6 +7,9 @@ pub type F = f32;
 mod bilateral;
 pub use bilateral::*;
 
+mod bilateral_f32;
+pub use bilateral_f32::*;
+
 mod guided_upsample;
 pub use guided_upsample::*;
 
@@ -46,6 +49,14 @@ pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
         }
         c => todo!("Not implemented for {c} channels"),
     }
+}
+
+pub fn diff_factor_f32<const C: usize>(a: [f32; C], b: [f32; C]) -> f32 {
+  let mut sum = 0.;
+  for i in 0..C {
+    sum += (a[i] - b[i]).abs()
+  }
+  sum
 }
 
 #[inline]
