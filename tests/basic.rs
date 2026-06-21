@@ -1,5 +1,5 @@
 use image;
-use recursive_bilateral::{Buffer, bilateral_filter, guided_2x_2};
+use recursive_bilateral::{Buffer, bilateral_filter, guided_2x};
 
 const IMG: &'static [u8] = include_bytes!("../data/farmhouse.jpg");
 const CKBD: &'static [u8] = include_bytes!("../data/checkerboard.png");
@@ -37,7 +37,7 @@ fn guided_upsample_test() {
     let mut out = img.clone();
     out.fill(0);
     let mut buf = Buffer::new();
-    guided_2x_2::<3, 4>(&low_res, &mut out, &guide, w, h, 0.12, 0.09, &mut buf);
+    guided_2x::<3, 4>(&low_res, &mut out, &guide, w, h, 0.12, 0.09, &mut buf);
 
-    out.save("upsample_2x_2.png").expect("Failed to save");
+    out.save("upsample_2x.png").expect("Failed to save");
 }
