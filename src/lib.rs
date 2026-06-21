@@ -41,6 +41,11 @@ impl Buffer {
     }
 }
 
+#[derive(Default)]
+pub struct BufferP1<const C: usize> {
+    buf: Vec<F>,
+}
+
 pub fn diff_factor<const C: usize>(a: [u8; C], b: [u8; C]) -> u8 {
     match C {
         1 => a[0].abs_diff(b[0]),

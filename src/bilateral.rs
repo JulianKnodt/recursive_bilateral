@@ -9,11 +9,10 @@ pub fn bilateral_filter<const C: usize, const C_PLUS_1: usize>(
     sigma_range: F,
 
     buf: &mut Buffer,
-) {
+) where [(); C + 1]: Clone {
     assert_eq!(
-        C + 1,
-        C_PLUS_1,
-        "Temporary restriction due to const generics"
+      C + 1,
+      C_PLUS_1,
     );
     assert_eq!(img_src.len(), w * h * C);
     assert_eq!(img_dst.len(), w * h * C);
@@ -29,7 +28,7 @@ pub fn bilateral_filter<const C: usize, const C_PLUS_1: usize>(
     buf.resize::<C>(w, h);
     let comps = buf.components_concat::<C>(w, h);
     let [lp, rp, dp, up] = comps.map(|c| {
-        let (cp, rem) = c.as_chunks_mut::<C_PLUS_1>();
+        let (cp, rem) = c.as_chunks_mut::<{C+1}>();
         assert_eq!(rem, &[]);
         assert_eq!(cp.len(), w * h);
         cp
